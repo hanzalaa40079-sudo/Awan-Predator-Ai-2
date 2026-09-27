@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Awan Prediction AI 2.0</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:#e7edf5;font-family:Arial,sans-serif}
+.top{height:58px;border-bottom:1px solid #202833;display:flex;align-items:center;gap:12px;padding:0 14px}
+.logo{font-weight:800;font-size:18px}.badge{font-size:11px;padding:5px 8px;border:1px solid #26313e;border-radius:5px;color:#8fd3ff}
+select,button{background:#121922;color:#dce5ef;border:1px solid #293544;border-radius:5px;padding:8px 10px}
+button.active{background:#26384c}.wrap{display:grid;grid-template-columns:1fr 300px;height:calc(100vh - 58px)}
+.main{min-width:0;display:flex;flex-direction:column}.toolbar{height:45px;border-bottom:1px solid #202833;display:flex;align-items:center;gap:6px;padding:0 10px}
+#chart{flex:1;min-height:420px}.side{border-left:1px solid #202833;padding:15px;background:#0e141b}
+.card{border:1px solid #27323f;border-radius:8px;padding:14px;margin-bottom:12px;background:#111821}
+.label{font-size:11px;color:#8291a3;text-transform:uppercase;letter-spacing:.08em}.value{font-size:25px;font-weight:800;margin-top:7px}
+.green{color:#35d08b}.red{color:#ff647c}.muted{color:#8b98a8;font-size:12px}.row{display:flex;justify-content:space-between;margin:8px 0;font-size:13px}
+.status{font-size:12px;padding:7px 9px;border-radius:5px;background:#16251f;color:#72dca9}
+.warn{background:#241d13;color:#f0bd68}
+@media(max-width:800px){.wrap{grid-template-columns:1fr}.side{border-left:0;border-top:1px solid #202833}.wrap{height:auto}.main{height:650px}}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="logo">AWAN PREDICTION AI 2.0</div>
+  <span class="badge">SIGNAL ONLY</span>
+  <select id="market"><option value="live">LIVE FOREX</option><option value="otc">OTC</option></select>
+  <select id="symbol">
+    <option>USD/JPY</option><option>EUR/USD</option><option>GBP/USD</option>
+    <option>AUD/USD</option><option>USD/CAD</option>
+  </select>
+  <span id="status" class="status">CONNECTING</span>
+</div>
+<div class="wrap">
+  <div class="main">
+    <div class="toolbar">
+      <span class="muted">TIME</span>
+      <button class="tf active" data-tf="60">1m</button>
+      <button class="tf" data-tf="300">5m</button>
+      <button class="tf" data-tf="900">15m</button>
+      <span style="flex:1"></span>
+      <span class="muted">EMA 9 / 21</span>
+    </div>
+    <div id="chart"></div>
+  </div>
+  <aside class="side">
+    <div class="card"><div class="label">Selected market</div><div id="marketName" class="value" style="font-size:19px">USD/JPY</div><div id="feed" class="muted">LIVE FOREX feed</div></div>
+    <div class="card"><div class="label">Next candle (+1)</div><div id="s1" class="value">—</div><div id="p1" class="muted">Waiting for candles</div></div>
+    <div class="card"><div class="label">Following candle (+2)</div><div id="s2" class="value">—</div><div id="p2" class="muted">Waiting for candles</div></div>
+    <div class="card">
+      <div class="label">Feed information</div>
+      <div class="row"><span>Ticks</span><b id="ticks">0</b></div>
+      <div class="row"><span>Candles</span><b id="candles">0</b></div>
+      <div class="row"><span>Last price</span><b id="price">—</b></div>
+      <div class="muted">LIVE and OTC are kept as separate feed modes. OTC requires an authorized OTC data source; this demo does not substitute ordinary Forex data for OTC.</div>
+    </div>
+  </aside>
+</div>
+<script>
+const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+  layout:{background:{color:'#0b0f14'},textColor:'#9aa8b8'},
+  grid:{vertLines:{color:'#151c24'},horzLines:{color:'#151c24'}},
+  crosshair:{mode:1},
+  rightPriceScale:{borderColor:'#28313c'},
+  timeScale:{borderColor:'#28313c',timeVisible:true,secondsVisible:false},
+  autoSize:true
+});
+const candles = chart.addCandlestickSeries({upColor:'#35d08b',downColor:'#ff647c',borderVisible:false,wickUpColor:'#35d08b',wickDownColor:'#ff647c'});
+const ema9 = chart.addLineSeries({color:'#f4c95d',lineWidth:1,priceLineVisible:false});
+const ema21 = chart.addLineSeries({color:'#79a7ff',lineWidth:1,priceLineVisible:false});
+
+let tf=60, bars=[], ticks=0, timer=null;
+const symbolMap={'USD/JPY':'frxUSDJPY','EUR/USD':'frxEURUSD','GBP/USD':'frxGBPUSD','AUD/USD':'frxAUDUSD','USD/CAD':'frxUSDCAD'};
+
+function wsConnect(){
+  if(timer) clearInterval(timer);
+  const s=document.getElementById('symbol').value;
+  const status=document.getElementById('status');
+  status.textContent='CONNECTING'; status.className='status';
+  bars=[]; candles.setData([]); ema9.setData([]); ema21.setData([]);
+  const ws=new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=1089');
+  ws.onopen=()=>{status.textContent='LIVE FEED';ws.send(JSON.stringify({ticks:symbolMap[s],subscribe:1}));};
+  ws.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    if(!d.tick)return;
+    ticks++; document.getElementById('ticks').textContent=ticks;
+    const price=Number(d.tick.quote), t=Number(d.tick.epoch);
+    document.getElementById('price').textContent=price.toFixed(5);
+    const bucket=Math.floor(t/tf)*tf;
+    let b=bars[bars.length-1];
+    if(!b || b.time!==bucket){
+      b={time:bucket,open:price,high:price,low:price,close:price};bars.push(b);
+    }else{b.high=Math.max(b.high,price);b.low=Math.min(b.low,price);b.close=price;}
+    candles.setData(bars.slice(-300).map(x=>({time:x.time,open:x.open,high:x.high,low:x.low,close:x.close})));
+    ema9.setData(calcEma(9)); ema21.setData(calcEma(21));
+    document.getElementById('candles').textContent=bars.length;
+    predict();
+  };
+  ws.onerror=()=>{status.textContent='FEED ERROR';status.className='status warn'};
+  ws.onclose=()=>{if(status.textContent==='LIVE FEED'){status.textContent='DISCONNECTED';status.className='status warn'}};
+}
+function calcEma(n){
+  if(bars.length<n)return [];
+  let k=2/(n+1), e=bars[0].close, out=[];
+  bars.forEach((b,i)=>{e=i===0?b.close:b.close*k+e*(1-k);out.push({time:b.time,value:e})});
+  return out;
+}
+function predict(){
+  if(bars.length<22)return;
+  const a=bars.slice(-22), e9=calcEma(9), e21=calcEma(21);
+  const last=a[a.length-1], prev=a[a.length-2];
+  const momentum=last.close-prev.close, trend=e9[e9.length-1].value-e21[e21.length-1].value;
+  const dir=momentum+trend>=0?'GREEN':'RED';
+  const dir2=trend>=0?'GREEN':'RED';
+  setSig('s1','p1',dir,Math.min(99,50+Math.round(Math.abs(momentum/trend||0)*10)));
+  setSig('s2','p2',dir2,55);
+}
+function setSig(id,pid,dir,conf){
+  const el=document.getElementById(id);el.textContent=dir;el.className='value '+(dir==='GREEN'?'green':'red');
+  document.getElementById(pid).textContent='Model estimate '+conf+'% — not a guarantee';
+}
+document.querySelectorAll('.tf').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tf').forEach(x=>x.classList.remove('active'));b.classList.add('active');tf=+b.dataset.tf;wsConnect()});
+document.getElementById('symbol').onchange=wsConnect;
+document.getElementById('market').onchange=()=>{
+  const m=document.getElementById('market').value;
+  document.getElementById('feed').textContent=m==='otc'?'OTC feed required — not substituted with LIVE Forex':'LIVE FOREX feed';
+  if(m==='otc'){document.getElementById('status').textContent='OTC FEED REQUIRED';document.getElementById('status').className='status warn';}
+  else wsConnect();
+};
+wsConnect();
+</script>
+</body>
+</html>
